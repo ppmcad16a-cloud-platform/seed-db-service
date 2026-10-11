@@ -10,9 +10,14 @@ const Brand = require('./models/brand');
 const Product = require('./models/product');
 const Category = require('./models/category');
 
+// Admin credentials: environment variables first (how Kubernetes passes
+// them, from a Secret), command-line arguments second (local use:
+// `npm start <email> <password>`). Environment variables are preferred
+// because command-line arguments are visible in process listings and in
+// the Kubernetes Job spec.
 const args = process.argv.slice(2);
-const email = args[0];
-const password = args[1];
+const email = process.env.SEED_ADMIN_EMAIL || args[0];
+const password = process.env.SEED_ADMIN_PASSWORD || args[1];
 
 const NUM_PRODUCTS = 100;
 const NUM_BRANDS = 10;
@@ -102,7 +107,9 @@ const seedDB = async () => {
           // LoremFlickr serves a real (if random) photo per URL, satisfying
           // the server's imageUrl validation (server/utils/image.js: must
           // start with http(s)://).
-          imageUrl: faker.image.urlLoremFlickr({ category: 'fashion', width: 640, height: 480 }),
+          // (faker.image.urlLoremFlickr() is deprecated in faker v10 and
+          // removed in v11; image.url() returns a real photo URL too.)
+          imageUrl: faker.image.url({ width: 640, height: 480 }),
           description: faker.lorem.sentence(),
           quantity: faker.number.int({ min: 1, max: 100 }),
           price: faker.commerce.price(),
@@ -119,6 +126,9 @@ const seedDB = async () => {
   } catch (error) {
     console.log(`${chalk.red('x')} ${chalk.red('Error while seeding database')}`);
     console.log(error);
+    // Non-zero exit code: a Kubernetes Job / Jenkins stage is marked FAILED
+    // (previously the script always exited 0, hiding failures).
+    process.exitCode = 1;
     return null;
   } finally {
     await mongoose.connection.close();
@@ -132,5 +142,6 @@ const seedDB = async () => {
     await seedDB();
   } catch (error) {
     console.error(`Error initializing database: ${error.message}`);
+    process.exitCode = 1;
   }
 })();

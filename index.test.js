@@ -37,6 +37,11 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // index.js sets process.exitCode = 1 on failure; reset it so a test that
+  // expects a failure doesn't make the whole Jest run exit non-zero.
+  process.exitCode = 0;
+  delete process.env.SEED_ADMIN_EMAIL;
+  delete process.env.SEED_ADMIN_PASSWORD;
   // Disconnects whatever index.js's own setupDB() connected — a no-op if
   // it's already been closed (e.g. the fixture-connection tests below close
   // it themselves before running index.js).
@@ -63,10 +68,37 @@ it('logs an error and exits gracefully when required arguments are missing', asy
     call => typeof call[0] === 'string' && call[0].includes('Error while seeding database')
   );
   expect(loggedError).toBe(true);
+  expect(process.exitCode).toBe(1);
 }, 25000);
+
+it('reads the admin credentials from environment variables (Kubernetes Secret)', async () => {
+  process.env.SEED_ADMIN_EMAIL = 'env-admin@test.com';
+  process.env.SEED_ADMIN_PASSWORD = 'password123';
+
+  await runSeedInProcess();
+
+  const User = require('./models/user');
+  await require('mongoose').connect(process.env.MONGO_URI);
+  expect(await User.countDocuments({ email: 'env-admin@test.com' })).toBe(1);
+  expect(process.exitCode).not.toBe(1);
+}, 30000);
+
+it('exits with code 1 when MongoDB is unreachable', async () => {
+  process.env.MONGO_URI = 'mongodb://127.0.0.1:1/unreachable?serverSelectionTimeoutMS=300';
+  process.argv = ['node', 'index.js', 'nobody@test.com', 'password123'];
+  require('./index');
+
+  await waitFor(() => consoleErrorSpy.mock.calls.length > 0, { timeout: 10000 });
+
+  expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect.stringContaining('Error initializing database')
+  );
+  expect(process.exitCode).toBe(1);
+}, 15000);
 
 it('seeds an admin user, categories, brands, and products from an empty database', async () => {
   await runSeedInProcess('fresh-admin@test.com', 'password123');
+  expect(process.exitCode).not.toBe(1);
 
   const User = require('./models/user');
   const Category = require('./models/category');
@@ -77,12 +109,7 @@ it('seeds an admin user, categories, brands, and products from an empty database
   // done (correct — it's a one-shot CLI script) — reopen one to inspect the
   // result, since the query below would otherwise buffer forever waiting on
   // a connection that's deliberately not coming back.
-  await require('mongoose').connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    useFindAndModify: false,
-    useCreateIndex: true
-  });
+  await require('mongoose').connect(process.env.MONGO_URI);
 
   const admin = await User.findOne({ email: 'fresh-admin@test.com' });
   expect(admin).not.toBeNull();
@@ -109,12 +136,7 @@ it('skips seeding everything on a database that already has enough of each', asy
   const Product = require('./models/product');
   const bcrypt = require('bcryptjs');
 
-  await mongoose.connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    useFindAndModify: false,
-    useCreateIndex: true
-  });
+  await mongoose.connect(process.env.MONGO_URI);
 
   // Fixtures are inserted directly (bypassing index.js) — this test only
   // cares about the "already sufficient, skip" branches, not re-verifying
@@ -168,12 +190,7 @@ it('skips seeding everything on a database that already has enough of each', asy
 
   // Re-open a connection to inspect the result — see the comment in the
   // "empty database" test above on why index.js's own is already closed.
-  await mongoose.connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    useFindAndModify: false,
-    useCreateIndex: true
-  });
+  await mongoose.connect(process.env.MONGO_URI);
 
   expect(await User.countDocuments({ email: 'already-seeded-admin@test.com' })).toBe(1);
   expect(await Category.countDocuments()).toBe(10);
@@ -191,6 +208,7 @@ it('logs a seeding error and still closes the connection when a query fails', as
     call => typeof call[0] === 'string' && call[0].includes('Error while seeding database')
   );
   expect(loggedError).toBe(true);
+  expect(process.exitCode).toBe(1);
 }, 25000);
 
 it('logs an initialization error when closing the connection itself fails', async () => {
@@ -205,4 +223,5 @@ it('logs an initialization error when closing the connection itself fails', asyn
   expect(consoleErrorSpy).toHaveBeenCalledWith(
     expect.stringContaining('Error initializing database')
   );
+  expect(process.exitCode).toBe(1);
 }, 25000);
