@@ -2,26 +2,16 @@ require('dotenv').config();
 const chalk = require('chalk');
 const mongoose = require('mongoose');
 
-// NOTE: connection failures are only logged (`.catch(err => console.log(err))`),
-// never thrown/rejected — this function always resolves, so `index.js`
-// can't detect at this point whether Mongo is actually reachable. Mongoose's
-// own query buffering is what lets the seeding that follows work anyway, as
-// long as the connection succeeds before those queries time out.
+// Connects to MongoDB and WAITS for the connection. A failure is re-thrown,
+// so index.js can stop and exit with a non-zero code (a Kubernetes Job then
+// shows as Failed instead of silently "Completed").
 const setupDB = async () => {
   try {
-    mongoose.set('useCreateIndex', true);
-    mongoose
-      .connect(process.env.MONGO_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        useFindAndModify: false
-      })
-      .then(() =>
-        console.log(`${chalk.green('✓')} ${chalk.blue('MongoDB Connected!')}`)
-      )
-      .catch(err => console.log(err));
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log(`${chalk.green('✓')} ${chalk.blue('MongoDB Connected!')}`);
   } catch (error) {
-    return null;
+    console.log(`${chalk.red('x')} ${chalk.red('MongoDB connection failed')}`);
+    throw error;
   }
 };
 
